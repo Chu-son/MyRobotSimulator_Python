@@ -1,6 +1,7 @@
 ﻿import socket
 import struct
 from math import *
+import random
 from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,17 +16,26 @@ class CommMyRobotSimulator:
         self.client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_sock.connect((serverAddr, serverPort))
 
-        self.img = Image.new("L",(400,400))
+        self.img = Image.new("L",(600,600))
         self.icp = MyIterativeClosestPoint()
 
         self.init_pos = []
         self.init_dir = []
         self.now_pos = []
         self.now_dir = []
+        
+        self.pre_pos = []
+        self.pre_dir = []
 
         self.hit_count = 0
+        self.pre_response = None
 
-    # 受信した点群データリストをLRF中心のxy座標に変換
+        self.R = np.identity(2)  #回転行列
+        self.t = np.zeros([2,1])  #並進ベクトル
+
+        self.urg_offset = [0.6,0.0]
+
+    # 受信した点群データリストをロボット回転中心を原点とするxy座標に変換
     # 想定するデータリスト構造　:　([　radian ... ,　distance ... ])
     def calc_local_coord(self, dataList):
         boundary = int( len(dataList) / 2)
@@ -36,9 +46,10 @@ class CommMyRobotSimulator:
         ret_y_list = []
 
         for ( rad , dist ) in zip( radian_list , distance_list ):
-            ret_x_list.append( dist * cos( rad ) )
-            ret_y_list.append( - dist * sin( rad ) )
+            ret_x_list.append( dist * cos( rad ) + self.urg_offset[0])
+            ret_y_list.append( - dist * sin( rad ) + self.urg_offset[1])
 
+        
         return ret_x_list , ret_y_list
 
     # 受信した現在の座標および姿勢から点群を世界座標に変換
@@ -53,14 +64,31 @@ class CommMyRobotSimulator:
                           [-sin(dir[1]), cos(dir[1])]] )
         T = numpy.array( [[ pos[0]] , [-pos[2]] ] )
 
-        data_array = np.array([data_array[0] + 0.6,
+        data_array = np.array([data_array[0],
+                               data_array[1]])
+        data_array = R.dot(data_array)
+        data_array = np.array([data_array[0] + T[0],
+                               data_array[1] + T[1]])
+        return data_array
+
+    def calc_odometry_correction_coord(self, dataList):
+        data_array = np.array(dataList)
+
+        pos = [now - pre for (pre, now, init) in zip(self.pre_pos, self.now_pos, self.init_pos)]
+        dir = [-radians(now - pre) for (pre, now, init) in zip(self.pre_dir, self.now_dir, self.init_dir)]
+
+        R = numpy.array( [[ cos(dir[1]), sin(dir[1])],
+                          [-sin(dir[1]), cos(dir[1])]] )
+        T = numpy.array( [[ pos[0]] , [-pos[2]] ] )
+
+        data_array = np.array([data_array[0],
                                data_array[1]])
         data_array = R.dot(data_array)
         data_array = np.array([data_array[0] + T[0],
                                data_array[1] + T[1]])
 
-        return data_array
 
+        return data_array, R, T
 
     #点群データから画像作成
     def plotPoint2Image(self, data):
@@ -102,14 +130,67 @@ class CommMyRobotSimulator:
         if self.init_pos == [] and self.init_dir == []:
             self.init_pos = response[0:3]
             self.init_dir = response[3:6]
+
+            self.now_pos = response[0:3]
+            self.now_dir = response[3:6]
+
+        self.pre_pos = self.now_pos
+        self.pre_dir = self.now_dir
+
         self.now_pos = response[0:3]
         self.now_dir = response[3:6]
+
+        #rand_range = 3.0
+        #rand_noise = random.random() * rand_range * 2 - rand_range
+        #self.now_pos = [x + rand_noise for x in response[0:3]]
+        #self.now_dir = [x + rand_noise for x in response[3:6]]
 
     # 点群情報を取得し，map画像を作成
     def get_lrf_data(self):
         response = self.get_data_list("lrf a")
-        #img = plotPoint2Image( icp.ICPMatching( calc_local_coord(response)) , img)
-        self.img = self.plotPoint2Image( self.calc_global_coord( self.calc_local_coord(response)))
+        if self.pre_response == None:
+            self.pre_response = self.calc_local_coord(response)
+            return
+        #self.img = self.plotPoint2Image( self.calc_global_coord( self.calc_local_coord(response)))
+
+        #plt.scatter(self.pre_response[0], self.pre_response[1], marker = "o",color = "r",s = 60, label = "data1")
+        res = self.calc_local_coord(response)
+        new_data, Ro, To = self.calc_odometry_correction_coord(res)
+        #plt.scatter(new_data[0,:],new_data[1,:],marker = "o",color = "g",s = 40, label = "data2")
+        R1, t1, _ = self.icp.get_movement(self.pre_response, res, Ro, To )
+
+        #R1 = Ro
+        #t1 = To
+
+        print("正解")
+        print(acos(Ro[0,0]) / pi * 180)
+        print(To)
+        print("ICP結果")
+        if R1[0,0] > 1.0 or R1[0,0] < -1.0:
+            R1[0,0] = 1.0 * R1[0,0] / abs(R1[0,0])
+        print(acos(R1[0,0]) / pi * 180)
+        print(t1)
+        print("誤差")
+        print(acos(R1[0,0]) / pi * 180-acos(Ro[0,0]) / pi * 180)
+        print(t1-To)
+
+        self.R = R1.dot( self.R )
+        self.t = R1.dot( self.t ) + t1 
+        
+        data_array = np.array(res)
+        data_array = np.array([data_array[0] ,
+                               data_array[1]])
+        data_array = self.R.dot(data_array)
+        data_array = np.array([data_array[0] + self.t[0],
+                               data_array[1] + self.t[1]])
+
+        #data_array = R1.dot(res)
+        #data_array = np.array([data_array[0] + t1[0],
+        #                       data_array[1] + t1[1]])
+
+        self.img = self.plotPoint2Image( data_array )
+
+        #plt.scatter(data_array[0,:],data_array[1,:],marker = "o",color = "b",s = 10, label = "data3")
 
         #画像をarrayに変換
         im_list = np.asarray(self.img)
@@ -119,7 +200,12 @@ class CommMyRobotSimulator:
         #表示
         plt.pause(.001)
 
-        #img.show()
+        #plt.legend(loc = "upper right")
+        #plt.show()
+
+        self.pre_response = res
+
+        #self.img.show()
         #print (response)
 
     # 駆動指令を送信
