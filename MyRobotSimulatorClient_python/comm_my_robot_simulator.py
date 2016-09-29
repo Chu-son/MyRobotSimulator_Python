@@ -34,6 +34,7 @@ class CommMyRobotSimulator:
         self.t = np.zeros([2,1])  #並進ベクトル
 
         self.urg_offset = [0.6,0.0]
+        self.icp.error_data = self.urg_offset
 
     # 受信した点群データリストをロボット回転中心を原点とするxy座標に変換
     # 想定するデータリスト構造　:　([　radian ... ,　distance ... ])
@@ -58,7 +59,7 @@ class CommMyRobotSimulator:
         data_array = np.array(dataList)
 
         pos = [now - init for (now,init) in zip(self.now_pos,self.init_pos)]
-        dir = [-radians(now - init) for (now,init) in zip(self.now_dir,self.init_dir)]
+        dir = [- radians(now - init) for (now,init) in zip(self.now_dir,self.init_dir)]
 
         R = numpy.array( [[ cos(dir[1]), sin(dir[1])],
                           [-sin(dir[1]), cos(dir[1])]] )
@@ -75,7 +76,7 @@ class CommMyRobotSimulator:
         data_array = np.array(dataList)
 
         pos = [now - pre for (pre, now, init) in zip(self.pre_pos, self.now_pos, self.init_pos)]
-        dir = [-radians(now - pre) for (pre, now, init) in zip(self.pre_dir, self.now_dir, self.init_dir)]
+        dir = [- radians(now - pre) for (pre, now, init) in zip(self.pre_dir, self.now_dir, self.init_dir)]
 
         R = numpy.array( [[ cos(dir[1]), sin(dir[1])],
                           [-sin(dir[1]), cos(dir[1])]] )
@@ -137,13 +138,13 @@ class CommMyRobotSimulator:
         self.pre_pos = self.now_pos
         self.pre_dir = self.now_dir
 
-        self.now_pos = response[0:3]
-        self.now_dir = response[3:6]
+        #self.now_pos = response[0:3]
+        #self.now_dir = response[3:6]
 
-        #rand_range = 3.0
-        #rand_noise = random.random() * rand_range * 2 - rand_range
-        #self.now_pos = [x + rand_noise for x in response[0:3]]
-        #self.now_dir = [x + rand_noise for x in response[3:6]]
+        rand_range = 1.0
+        rand_noise = random.random() * rand_range * 2 - rand_range
+        self.now_pos = [x + rand_noise for x in response[0:3]]
+        self.now_dir = [x + rand_noise for x in response[3:6]]
 
     # 点群情報を取得し，map画像を作成
     def get_lrf_data(self):
@@ -153,55 +154,57 @@ class CommMyRobotSimulator:
             return
         #self.img = self.plotPoint2Image( self.calc_global_coord( self.calc_local_coord(response)))
 
-        #plt.scatter(self.pre_response[0], self.pre_response[1], marker = "o",color = "r",s = 60, label = "data1")
+        plt.scatter(self.pre_response[0], self.pre_response[1], marker = "o",color = "r",s = 60, label = "data1")
         res = self.calc_local_coord(response)
         new_data, Ro, To = self.calc_odometry_correction_coord(res)
-        #plt.scatter(new_data[0,:],new_data[1,:],marker = "o",color = "g",s = 40, label = "data2")
+        plt.scatter(new_data[0,:],new_data[1,:],marker = "o",color = "g",s = 40, label = "data2")
         R1, t1, _ = self.icp.get_movement(self.pre_response, res, Ro, To )
 
         #R1 = Ro
         #t1 = To
 
-        print("正解")
-        print(acos(Ro[0,0]) / pi * 180)
-        print(To)
-        print("ICP結果")
-        if R1[0,0] > 1.0 or R1[0,0] < -1.0:
-            R1[0,0] = 1.0 * R1[0,0] / abs(R1[0,0])
-        print(acos(R1[0,0]) / pi * 180)
-        print(t1)
-        print("誤差")
-        print(acos(R1[0,0]) / pi * 180-acos(Ro[0,0]) / pi * 180)
-        print(t1-To)
+        #print("正解")
+        #print(acos(Ro[0,0]) / pi * 180)
+        #print(To)
+        #print("ICP結果")
+        #if R1[0,0] > 1.0 or R1[0,0] < -1.0:
+        #    R1[0,0] = 1.0 * R1[0,0] / abs(R1[0,0])
+        #print(acos(R1[0,0]) / pi * 180)
+        #print(t1)
+        #print("誤差")
+        #print(acos(R1[0,0]) / pi * 180-acos(Ro[0,0]) / pi * 180)
+        #print(t1-To)
 
-        self.R = R1.dot( self.R )
-        self.t = R1.dot( self.t ) + t1 
+        #self.R = R1.dot( self.R )
+        #self.t = R1.dot( self.t ) + t1 
         
-        data_array = np.array(res)
-        data_array = np.array([data_array[0] ,
-                               data_array[1]])
-        data_array = self.R.dot(data_array)
-        data_array = np.array([data_array[0] + self.t[0],
-                               data_array[1] + self.t[1]])
+        #data_array = np.array(res)
+        #data_array = np.array([data_array[0] ,
+        #                       data_array[1]])
+        #data_array = self.R.dot(data_array)
+        #data_array = np.array([data_array[0] + self.t[0],
+        #                       data_array[1] + self.t[1]])
 
-        #data_array = R1.dot(res)
-        #data_array = np.array([data_array[0] + t1[0],
-        #                       data_array[1] + t1[1]])
+        #self.img = self.plotPoint2Image( data_array )
 
-        self.img = self.plotPoint2Image( data_array )
+        ##画像をarrayに変換
+        #im_list = np.asarray(self.img)
+        ##貼り付け
+        #plt.imshow(im_list)
+        #plt.gray()
+        ##表示
+        #plt.pause(.001)
 
-        #plt.scatter(data_array[0,:],data_array[1,:],marker = "o",color = "b",s = 10, label = "data3")
 
-        #画像をarrayに変換
-        im_list = np.asarray(self.img)
-        #貼り付け
-        plt.imshow(im_list)
-        plt.gray()
-        #表示
-        plt.pause(.001)
+        data_array = R1.dot(res)
+        data_array = np.array([data_array[0] + t1[0],
+                               data_array[1] + t1[1]])
 
-        #plt.legend(loc = "upper right")
-        #plt.show()
+        plt.scatter(data_array[0,:],data_array[1,:],marker = "o",color = "b",s = 10, label = "data3")
+
+        plt.legend(loc = "upper right")
+        plt.show()
+
 
         self.pre_response = res
 
