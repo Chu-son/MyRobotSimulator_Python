@@ -1,14 +1,9 @@
 ﻿from math import *
 import numpy as np
 import numpy.matlib
+import matplotlib.pyplot as plt
+import copy
 
-
-class AdditionalInformation():
-    def __init__(self):
-        self.is_error = False
-        self.is_boundary = False
-        self.gradient = 0.0
-        self.reference_count = 0
 
 class MyIterativeClosestPoint:
 
@@ -31,9 +26,14 @@ class MyIterativeClosestPoint:
 
         self.accuracy = 0
 
-    def get_movement(self, pre_data, new_data, R = np.identity(2), t = np.zeros_like([2,1])):
+    def get_movement(self, pre_data, new_data, R = np.identity(2), t = np.zeros([2,1])):
+        print("icp matching")
         pre_data = np.array(pre_data)
         new_data = np.array(new_data)
+
+        original_R = copy.deepcopy(R)
+        original_t = copy.deepcopy(t)
+        original_new_data = copy.deepcopy(new_data)
 
         additional_info = [self.get_additional_list(pre_data),self.get_additional_list(new_data)] 
 
@@ -45,16 +45,14 @@ class MyIterativeClosestPoint:
         #ICP パラメータ
         preError = 0    #一つ前のイタレーションのerror値
         dError = 10000  #エラー値の差分
-        EPS = 0.0001    #収束判定値
+        EPS = 0.001    #収束判定値
         maxIter = 200   #最大イタレーション数
         count = 0       #ループカウンタ
 
         #boundary_list = [self.make_boundary_list(pre_data), self.make_boundary_list(new_data)]
         #gradient_list = [self.make_gradient_list(pre_data, boundary_list[0]), self.make_gradient_list(new_data, boundary_list[1])]
 
-        new_data = R.dot(new_data)
-        new_data = np.array([new_data[0] + t[0],
-                               new_data[1] + t[1]])
+        new_data = R.dot(new_data) + t
 
         while not(dError < EPS):
             count = count + 1
@@ -67,16 +65,20 @@ class MyIterativeClosestPoint:
             #print(t1)
             
             #計算したRとtで点群とRとtの値を更新
-            new_data = R1.dot( new_data )
-            new_data = np.array([new_data[0] + t1[0],
-                                 new_data[1] + t1[1]])
+            new_data = R1.dot( new_data ) + t1
+
             R = R1.dot( R )
             t = R1.dot( t ) + t1 
     
             dError = abs(preError - error)  #エラーの改善量
             preError = error    #一つ前のエラーの総和値を保存
 
-            print(error)
+            #print(error)
+
+
+            #plt.scatter(pre_data[0], pre_data[1], marker = "o",color = "r",s = 60, label = "data1")
+            #plt.scatter(new_data[0], new_data[1], marker = "o",color = "b",s = 20, label = "data2")
+            #plt.show()
     
             if count > maxIter:  #収束しなかった
                 print('Max Iteration')
@@ -87,8 +89,15 @@ class MyIterativeClosestPoint:
 
         return R, t, new_data
 
+    class AdditionalInformation():
+        def __init__(self):
+            self.is_error = False
+            self.is_boundary = False
+            self.gradient = 0.0
+            self.reference_count = 0
+
     def get_additional_list(self, data_array):
-        ret_list = [AdditionalInformation() for _ in data_array[0]]
+        ret_list = [MyIterativeClosestPoint.AdditionalInformation() for _ in data_array[0]]
         
         # error値と境界点の設定
         if data_array[0][0] == self.error_data[0] \
@@ -126,7 +135,7 @@ class MyIterativeClosestPoint:
 
         @classmethod
         def get_grad_rate_list(cls):
-            MIN_RATE = 0.5
+            MIN_RATE = 0.3
             total = 0
             for ave in cls.grad_ave_list:
                 total += ave
@@ -263,7 +272,7 @@ class MyIterativeClosestPoint:
 
     #特異値分解法による並進ベクトルと、回転行列の計算
     def SVDMotionEstimation(self, pre_data, new_data, index):
-        print("data size:{}=>{}".format(len(pre_data[0]),len(index[0])))
+        #print("data size:{}=>{}".format(len(pre_data[0]),len(index[0])))
         #各点群の重心の計算
         M = pre_data[:,index[0]]
         mm = np.c_[M.mean(1)]
