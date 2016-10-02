@@ -25,6 +25,9 @@
     <Compile Include="comm_my_robot_simulator.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="localization.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="my_iterative_closest_point.py">
       <SubType>Code</SubType>
     </Compile>
