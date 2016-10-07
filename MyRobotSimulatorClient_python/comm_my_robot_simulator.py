@@ -7,6 +7,7 @@ import numpy as np
 from my_iterative_closest_point import *
 import copy
 import cv2
+from localization import *
 
 
 class CommMyRobotSimulator:
@@ -75,6 +76,10 @@ class CommMyRobotSimulator:
     def make_map_loop(self):
         mapping = MappingSimulator()
         mapping.make_map_loop()
+
+    def Localization_loop(self):
+        loc = LocalizationSimulator()
+        loc.localization_loop()
 
 class MappingSimulator(CommMyRobotSimulator):
     def __init__(self, serverPort = 8000, serverAddr = "localhost"):
@@ -238,3 +243,77 @@ class MappingSimulator(CommMyRobotSimulator):
             self.get_movement()
             self.get_lrf_data()
 
+
+class LocalizationSimulator(CommMyRobotSimulator):
+    def __init__(self, serverPort = 8000, serverAddr = 'localhost'):
+        super().__init__(serverPort, serverAddr)
+
+        self.pf = MyParticleFilter("./map2.jpg")
+
+        self.init_pos = []
+        self.init_dir = []
+        self.now_pos = []
+        self.now_dir = []
+        
+        self.pre_pos = []
+        self.pre_dir = []
+
+    # 現在地を取得し，メンバを更新
+    def get_movement(self):
+        response = super().get_movement()
+        if self.init_pos == [] and self.init_dir == []:
+            self.init_pos = response[0:3]
+            self.init_dir = response[3:6]
+
+            self.pf.init_positoin([300,
+                                   1000],
+                                  0.0)
+
+            self.now_pos = response[0:3]
+            self.now_dir = response[3:6]
+
+        self.pre_pos = self.now_pos
+        self.pre_dir = self.now_dir
+
+        self.now_pos = response[0:3]
+        self.now_dir = response[3:6]
+
+        #rand_range = 0.5
+        #rand_noise = random.random() * rand_range * 2 - rand_range
+        #self.now_pos = [x + rand_noise for x in response[0:3]]
+        #self.now_dir = [x + rand_noise for x in response[3:6]]
+
+    # 点群情報を取得し，map画像を作成
+    def get_lrf_data(self):
+        response = super().get_lrf_data()
+        return self.calc_local_coord(response)
+
+   #点群データから画像作成
+    def plotPoint2Image(self, data):
+        self.img = np.zeros((600, 600, 1), np.uint8)
+        coefficient = 100.0 / 5.0
+        origin_x = 300
+        #origin_y = self.img.shape[1] / 2.0
+        origin_y = 300
+            
+        for (raw_x, raw_y) in zip(data[0],data[1]):
+            if raw_x == 0 and raw_y == 0:continue
+            x = int(raw_x + origin_x)
+            y = int(raw_y + origin_y)
+        
+            if self.img[y,x] != 250:
+               self.img[y,x] = 200
+        return self.img
+     
+    def localize(self):
+        self.get_movement()
+        self.pf.set_delta_position([self.now_pos[0]-self.pre_pos[0],self.now_pos[1]-self.pre_pos[1]],
+                                   (self.now_dir[1]-self.pre_dir[1]) * pi / 180.0)
+        lrf = self.pf.estimate_position(self.get_lrf_data())
+        cv2.imshow("lrf",self.plotPoint2Image( lrf ))
+        cv2.waitKey(0)
+
+
+    def localization_loop(self):
+        while True:
+            self.localize()
