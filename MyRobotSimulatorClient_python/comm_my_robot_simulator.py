@@ -20,17 +20,29 @@ class CommMyRobotSimulator:
 
         self.urg_offset = [0.6,0.0]
 
+        self._errorlist = []
+
     # 受信した点群データリストをロボット回転中心を原点とするxy座標に変換
     # 想定するデータリスト構造　:　([　radian ... ,　distance ... ])
-    def calc_local_coord(self, dataList):
+    def calc_local_coord(self, dataList, remove_error = False):
         boundary = int( len(dataList) / 2)
         radian_list = dataList[:boundary]
         distance_list = dataList[boundary:len(dataList)]
 
         ret_x_list = []
         ret_y_list = []
-
+        self._errorlist.clear()
         for ( rad , dist ) in zip( radian_list , distance_list ):
+            if remove_error and dist == 0.0:continue
+
+            if dist == 0.0:
+                self._errorlist.append(True)
+                dist = 10.0
+            elif dist == 0.1:
+                self._errorlist.append(True)
+            else:
+                self._errorlist.append(False)
+
             ret_x_list.append( dist * cos( rad ) + self.urg_offset[0])
             ret_y_list.append( - dist * sin( rad ) + self.urg_offset[1])
         
@@ -141,10 +153,22 @@ class MappingSimulator(CommMyRobotSimulator):
         #origin_y = self.img.shape[1] / 2.0
         origin_y = 1000
     
+        index = -1
         for (raw_x, raw_y) in zip(data[0],data[1]):
-            if raw_x == 0 and raw_y == 0:continue
+            index += 1
+
             x = int(raw_x * coefficient + origin_x)
             y = int(raw_y * coefficient + origin_y)
+
+            robot_x = self.now_pos[0]
+            robot_y = self.now_pos[2]
+
+            robot_x = int(robot_x * coefficient + origin_x)
+            robot_y = int(-robot_y * coefficient + origin_y)
+
+            cv2.line(self.img, (robot_x,robot_y),(x,y),(100,100,100))
+
+            if self._errorlist[index] == True:continue
         
             if self.img[y,x] != 250:
                self.img[y,x] += 50
@@ -177,38 +201,38 @@ class MappingSimulator(CommMyRobotSimulator):
         if self.pre_response == None:
             self.pre_response = self.calc_local_coord(response)
             return
-        #self.img = self.plotPoint2Image( self.calc_global_coord( self.calc_local_coord(response)))
+        self.img = self.plotPoint2Image( self.calc_global_coord( self.calc_local_coord(response)))
 
         #plt.scatter(self.pre_response[0], self.pre_response[1], marker = "o",color = "r",s = 60, label = "data1")
         res = self.calc_local_coord(response)
-        new_data, Ro, To = self.calc_odometry_correction_coord(res)
-        #plt.scatter(new_data[0,:],new_data[1,:],marker = "o",color = "g",s = 40, label = "data2")
-        R1, t1, _ = self.icp.get_movement(self.pre_response, res, Ro, To )
+        ##new_data, Ro, To = self.calc_odometry_correction_coord(res)
+        ###plt.scatter(new_data[0,:],new_data[1,:],marker = "o",color = "g",s = 40, label = "data2")
+        ##R1, t1, _ = self.icp.get_movement(self.pre_response, res, Ro, To )
 
-        #R1 = Ro
-        #t1 = To
+        ###R1 = Ro
+        ###t1 = To
 
-        #print("正解")
-        #print(acos(Ro[0,0]) / pi * 180)
-        #print(To)
-        print("ICP結果")
-        if R1[0,0] > 1.0 or R1[0,0] < -1.0:
-            R1[0,0] = 1.0 * R1[0,0] / abs(R1[0,0])
-        print(acos(R1[0,0]) / pi * 180)
-        print(t1)
-        #print("誤差")
-        #print(acos(R1[0,0]) / pi * 180-acos(Ro[0,0]) / pi * 180)
-        #print(t1-To)
+        ###print("正解")
+        ###print(acos(Ro[0,0]) / pi * 180)
+        ###print(To)
+        ##print("ICP結果")
+        ##if R1[0,0] > 1.0 or R1[0,0] < -1.0:
+        ##    R1[0,0] = 1.0 * R1[0,0] / abs(R1[0,0])
+        ##print(acos(R1[0,0]) / pi * 180)
+        ##print(t1)
+        ###print("誤差")
+        ###print(acos(R1[0,0]) / pi * 180-acos(Ro[0,0]) / pi * 180)
+        ###print(t1-To)
 
-        self.R = R1.dot( self.R )
-        #self.t = R1.dot( self.t ) + t1 
-        #self.t =  self.t + t1 
-        self.t = self.t + self.R.dot(t1)
+        ##self.R = R1.dot( self.R )
+        ###self.t = R1.dot( self.t ) + t1 
+        ###self.t =  self.t + t1 
+        ##self.t = self.t + self.R.dot(t1)
         
-        data_array = np.array(res)
-        data_array = self.R.dot(data_array) + self.t
+        ##data_array = np.array(res)
+        ##data_array = self.R.dot(data_array) + self.t
 
-        self.img = self.plotPoint2Image( data_array )
+        ##self.img = self.plotPoint2Image( data_array )
 
         ##画像をarrayに変換
         #im_list = np.asarray(self.img)
@@ -252,11 +276,20 @@ class LocalizationSimulator(CommMyRobotSimulator):
 
         self.init_pos = []
         self.init_dir = []
+
         self.now_pos = []
         self.now_dir = []
+        self.now_pos_noisy = []
+        self.now_dir_noisy = []
         
         self.pre_pos = []
         self.pre_dir = []
+        self.pre_pos_noisy = []
+        self.pre_dir_noisy = []
+
+        self.est_pos = [] # [x,y,th]
+
+        self.map_coord_origin = [300,1000]
 
     # 現在地を取得し，メンバを更新
     def get_movement(self):
@@ -265,32 +298,41 @@ class LocalizationSimulator(CommMyRobotSimulator):
             self.init_pos = response[0:3]
             self.init_dir = response[3:6]
 
-            self.pf.init_positoin([300,
-                                   1000],
+            self.pf.init_positoin(self.map_coord_origin,
                                   0.0)
 
             self.now_pos = response[0:3]
             self.now_dir = response[3:6]
 
+            self.now_pos_noisy = response[0:3]
+            self.now_dir_noisy = response[3:6]
+
         self.pre_pos = self.now_pos
         self.pre_dir = self.now_dir
+
+        self.pre_pos_noisy = self.now_pos_noisy
+        self.pre_dir_noisy = self.now_dir_noisy
 
         self.now_pos = response[0:3]
         self.now_dir = response[3:6]
 
-        #rand_range = 0.5
-        #rand_noise = random.random() * rand_range * 2 - rand_range
-        #self.now_pos = [x + rand_noise for x in response[0:3]]
-        #self.now_dir = [x + rand_noise for x in response[3:6]]
+        rand_range = 1.0
+        rand_noise = random.random() * rand_range * 2 - rand_range
+        noisy_x = (self.now_pos[0] - self.pre_pos[0]) * 1.3
+        noisy_y = (self.now_pos[2] - self.pre_pos[2]) * 1.3
+        noisy_th = self.now_dir[2] - self.pre_dir[2] + 3.0
+        #self.now_pos_noisy = [x + rand_noise for x in response[0:3]]
+        self.now_pos_noisy = [self.pre_pos_noisy[0] + noisy_x, self.pre_pos_noisy[1] + noisy_y, self.now_pos[2]]
+        self.now_dir_noisy = [x + noisy_th for x in response[3:6]]
 
     # 点群情報を取得し，map画像を作成
     def get_lrf_data(self):
         response = super().get_lrf_data()
-        return self.calc_local_coord(response)
+        return self.calc_local_coord(response, True)
 
    #点群データから画像作成
     def plotPoint2Image(self, data):
-        self.img = np.zeros((600, 600, 1), np.uint8)
+        img = np.zeros((600, 600, 1), np.uint8)
         coefficient = 100.0 / 5.0
         origin_x = 300
         #origin_y = self.img.shape[1] / 2.0
@@ -298,20 +340,65 @@ class LocalizationSimulator(CommMyRobotSimulator):
             
         for (raw_x, raw_y) in zip(data[0],data[1]):
             if raw_x == 0 and raw_y == 0:continue
-            x = int(raw_x + origin_x)
-            y = int(raw_y + origin_y)
+            x = int(raw_x * coefficient + origin_x)
+            y = int(raw_y * coefficient + origin_y)
         
-            if self.img[y,x] != 250:
-               self.img[y,x] = 200
-        return self.img
+            if img[y,x] != 250:
+               img[y,x] = 200
+        return img
+
+    def show_position(self):
+        img = copy.deepcopy(self.pf._map_image)
+        img = cv2.cvtColor(img,cv2.COLOR_GRAY2BGR)
+
+        # パーティクルたち
+        for p in self.pf._particle_list:
+            cv2.circle(img,
+                   (int(p.x),
+                    int(p.y)),
+                   1,(0,255,0))
+
+        coeff = 1000 // 50
+        # 真の位置
+        cv2.circle(img,
+                   (int((self.now_pos[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int(-(self.now_pos[2] - self.init_pos[2]) * coeff) + self.map_coord_origin[1]),
+                   10,(0,0,255),3)
+
+        # ノイズ入りの位置
+        cv2.circle(img,
+                   (int((self.now_pos_noisy[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int(-(self.now_pos_noisy[2] - self.init_pos[2]) * coeff) + self.map_coord_origin[1]),
+                   5,(0,0,255),3)
+
+        # 推定位置
+        cv2.circle(img,
+                   (int((self.est_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int((self.est_pos[1]) * coeff) + self.map_coord_origin[1]),
+                   5,(255,0,0),3)
+
+        cv2.imshow("estimate",img)
+
+        th = self.pf._particle_list[0].theta
+        R = np.array([[cos( -th ) , sin( -th)],
+                      [ -sin( -th ), cos( -th)]])
+        data = R.dot(self.lrf_data + np.array([[self.pf._particle_list[0].x - int((self.now_pos_noisy[0]) * coeff) - self.map_coord_origin[0]],
+                                               [self.pf._particle_list[0].y - int((self.now_pos_noisy[1]) * coeff) - self.map_coord_origin[1]]])
+                     )
+        #data = R.dot(self.lrf_data )
+        #cv2.imshow("particle",self.plotPoint2Image(data))
      
     def localize(self):
         self.get_movement()
-        self.pf.set_delta_position([self.now_pos[0]-self.pre_pos[0],self.now_pos[1]-self.pre_pos[1]],
-                                   (self.now_dir[1]-self.pre_dir[1]) * pi / 180.0)
-        lrf = self.pf.estimate_position(self.get_lrf_data())
-        cv2.imshow("lrf",self.plotPoint2Image( lrf ))
-        cv2.waitKey(0)
+        #self.pf.set_delta_position([self.now_pos[0]-self.pre_pos[0],self.now_pos[1]-self.pre_pos[1]],
+        #                           (self.now_dir[1]-self.pre_dir[1]) * pi / 180.0)
+        self.pf.set_delta_position([self.now_pos_noisy[0]-self.pre_pos_noisy[0],-(self.now_pos_noisy[1]-self.pre_pos_noisy[1])],
+                                   (self.now_dir_noisy[1]-self.pre_dir_noisy[1]) * pi / 180.0)
+        self.lrf_data = self.get_lrf_data()
+        self.est_pos = self.pf.estimate_position(self.lrf_data)
+        #cv2.imshow("lrf",self.plotPoint2Image( lrf ))
+        self.show_position()
+        cv2.waitKey(5)
 
 
     def localization_loop(self):
