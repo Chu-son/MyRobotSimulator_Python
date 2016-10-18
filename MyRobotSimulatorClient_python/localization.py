@@ -20,8 +20,7 @@ class MyParticleFilter():
         self._pixel_size = 50 # mm/pixel
 
         # 得点表作成
-        self._points = [16,8,4,2,1]
-        #self._points = [128,64,32,16,8,4,2,1]
+        self._points = [32,16,4,2]
         #self._points = [200,150,100,50,1] # 目視確認用
         self._point_len = len(self._points)-1
         self._point_table = []
@@ -47,14 +46,17 @@ class MyParticleFilter():
 
     # 事前地図から尤度マップ的なのを作成
     def _make_likelihood_map(self):
-        self._likelihood_map = cv2.imread("./likelihood.jpg",0)
-        return 
+        self._likelihood_map = cv2.imread("./likelihood.bmp",0)
+        if self._likelihood_map is not None: return 
 
         print( "making likelihood map")
         ref_map = np.zeros_like(self._map_image)
         for y in range(self._point_len+1, self._map_image.shape[0]-self._point_len):
             for x in range(self._point_len+1, self._map_image.shape[1]-self._point_len):
-                if self._map_image[y,x] > 100:
+                if self._map_image[y,x] == 101:
+                    ref_map[y,x] = 2
+
+                if self._map_image[y,x] > 101:
                     for yp in range(self._point_len * 2 + 1):
                         for xp in range(self._point_len * 2 + 1 ):
                             x_ref = x + (xp - self._point_len)
@@ -63,7 +65,7 @@ class MyParticleFilter():
 
         #cv2.imshow("trim",trimed_map)
         #cv2.imshow("ref",ref_map)
-        cv2.imwrite("likelihood.jpg",ref_map)
+        cv2.imwrite("likelihood.bmp",ref_map)
         self._likelihood_map = ref_map
         return ref_map
 
@@ -96,20 +98,40 @@ class MyParticleFilter():
         self._theta = theta        
         self._particle_list.clear()
         for _ in range(self._particle_num):
-            self._particle_list.append( MyParticleFilter.Particle( pos[0] + self._gaussian() * 10,
-                                                                   pos[1] + self._gaussian() * 10,
-                                                                   theta + self._gaussian() * 0.005,
+            self._particle_list.append( MyParticleFilter.Particle( pos[0] + self._gaussian() * 30,
+                                                                   pos[1] + self._gaussian() * 30,
+                                                                   theta + self._gaussian() * 0.1,
                                                                    0.0 ) )
+
+    def _get_resample_particle(self, particle, sigma_pos, sigma_theta):
+        p = copy.deepcopy(particle)
+        p.x = particle.x + self._gaussian() * sigma_pos
+        p.y = particle.y + self._gaussian() * sigma_pos
+        p.theta = particle.theta + self._gaussian() * sigma_theta
+
+        return p if self._likelihood_map[p.y,p.x] != 0 \
+                    else self._get_resample_particle(particle,sigma_pos,sigma_theta)
+
+    def _random_sample_particles(self, sigma_pos, sigma_theta):
+        for i in range(self._particle_num):
+            self._particle_list[i] = self._get_resample_particle( MyParticleFilter.Particle(self._pos[0],
+                                                                                            self._pos[1],
+                                                                                            self._theta,
+                                                                                            0.0),
+                                                                 sigma_pos,
+                                                                 sigma_theta)
+
 
     def _resample_particles(self):
         thre1 = 1/3
         thre2 = 1/3
         boundary1 = int(self._particle_num * thre1)
         boundary2 = int(self._particle_num * thre2) + boundary1
-        var_fb = 20
-        var_fb2 = 40
-        var_ang = 0.005
-        var_ang2 = 0.05
+
+        var_fb = 1 * 1000 // self._pixel_size
+        var_fb2 = 2.5 * 1000 // self._pixel_size
+        var_ang = 5 * pi / 180 # [rad]
+        var_ang2 = 60 * pi / 180
 
         #boundary1 = 0
         #for p in self._particle_list:
@@ -119,27 +141,20 @@ class MyParticleFilter():
         #boundary2 = int(self._particle_num * thre2) + boundary1
 
         for i in range(boundary1, boundary2):
-            self._particle_list[i].x = self._particle_list[i - boundary1].x + self._gaussian() * var_fb
-            self._particle_list[i].y = self._particle_list[i - boundary1].y + self._gaussian() * var_fb
-            self._particle_list[i].theta = self._particle_list[i - boundary1].theta + self._gaussian() * var_ang
+            self._particle_list[i] = self._get_resample_particle( self._particle_list[i - boundary1],
+                                                                 var_fb, 
+                                                                 var_ang)
 
         for i in range(boundary2 , self._particle_num):
             #self._particle_list[i].x = self._particle_list[i - boundary].x + self._gaussian() * var_fb2
             #self._particle_list[i].y = self._particle_list[i - boundary].y + self._gaussian() * var_fb2
             #self._particle_list[i].theta = self._particle_list[i - boundary].theta + self._gaussian() * var_ang2
-            self._particle_list[i].x = self._pos[0] + self._gaussian() * var_fb2
-            self._particle_list[i].y = self._pos[1] + self._gaussian() * var_fb2
-            self._particle_list[i].theta = self._theta + self._gaussian() * var_ang2
+            self._particle_list[i] = self._get_resample_particle(MyParticleFilter.Particle( self._pos[0], self._pos[1], self._theta, 0.0),
+                                                                 var_fb2,
+                                                                 var_ang2)
         
     # dPos : [x, y](m), dTh(rad)
     def set_delta_position(self, dPos, dTh):
-        thre = 0.5
-        num = int(self._particle_num * thre)
-        #var_fb = 0.01
-        var_fb = 10
-        var_fb2 = 30
-        var_ang = 0.005
-        var_ang2 = 0.01
 
         # m => pixel
         dPos = [dPos[0] * 1000 / self._pixel_size, dPos[1] * 1000 / self._pixel_size]
@@ -204,11 +219,14 @@ class MyParticleFilter():
         cv2.imshow("particle_view",img)
 
     def _calc_particle_weight(self, particle, lrfdata, refmap):
+        if self._likelihood_map[particle.y,particle.x] == 0:
+            return 0
+
         R = np.array([[cos( -particle.theta ) , sin( -particle.theta)],
                       [ -sin( -particle.theta ), cos( -particle.theta)]])
         T = np.array([[particle.x - self._pos[0]],
                       [particle.y - self._pos[1]]])
-        data = R.dot(lrfdata + T)
+        data = R.dot(lrfdata) + T
 
         #self.plotPoint2Image(data)
         #cv2.waitKey(20)
@@ -221,6 +239,7 @@ class MyParticleFilter():
             x = int(x + self._ref_width/2 + 0.5)
             if x < 0: x = 0
             elif x >= refmap.shape[0]: x = refmap.shape[0] - 1
+
             ret_weight += refmap[y,x]
 
         return ret_weight
@@ -249,7 +268,7 @@ class MyParticleFilter():
         y = 0.0
         th = 0.0
         for p in self._particle_list:
-            if p.nomalized_weight < 0.8:break
+            if p.nomalized_weight < 0.9:break
             num += 1
             w += p.weight
             x += p.x * p.weight
@@ -272,9 +291,11 @@ class MyParticleFilter():
     def estimate_position(self, LRFdata):
         #print("start estimate")
         ref_map = self._prepare_ref_map()
+        #cv2.imshow("ref",self._ref_map)
 
         # m => pixel
         lrfdata = np.array(LRFdata) * 1000 / self._pixel_size
+        self.plotPoint2Image(lrfdata)
 
         for index in range(self._particle_num):
             self._particle_list[index].weight = self._calc_particle_weight(self._particle_list[index],
@@ -286,16 +307,21 @@ class MyParticleFilter():
 
         #self._pos = [self._particle_list[0].x, self._particle_list[0].y]
         #self._theta = self._particle_list[0].theta
+
         #self._pos, self._theta = self.__calc_pos_ave()
+        #self._resample_particles()
+
         p,th, acc = self.__calc_pos_weight_ave(lrfdata)
         print(acc * 100.0)
-
         if acc > 0.5:
             self._pos, self._theta = p,th
+            self._resample_particles()
+        else:
+            self._random_sample_particles(50, 0.1)
+
         #self.show_particles()
 
         #print("end estimate")
-        self._resample_particles()
         return ((self._pos[0] - self._init_pos[0]) * self._pixel_size / 1000 ,
                 (self._pos[1] - self._init_pos[1]) * self._pixel_size / 1000 ,
                 self._theta)

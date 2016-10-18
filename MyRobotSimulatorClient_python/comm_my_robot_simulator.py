@@ -33,7 +33,7 @@ class CommMyRobotSimulator:
         ret_y_list = []
         self._errorlist.clear()
         for ( rad , dist ) in zip( radian_list , distance_list ):
-            if remove_error and dist == 0.0:continue
+            if remove_error and (dist == 0.0 or dist == 0.1):continue
 
             if dist == 0.0:
                 self._errorlist.append(True)
@@ -146,6 +146,38 @@ class MappingSimulator(CommMyRobotSimulator):
 
         return data_array, R, T
 
+    def line(self, img, start, end, color):
+        x = start[0]
+        y = start[1]
+        dx = abs(end[0] - start[0])
+        dy = abs(end[1] - start[1])
+        sx = 1 if end[0] > start[0] else -1
+        sy = 1 if end[1] > start[1] else -1
+
+        if dx >= dy:
+            err = 2 * dy - dx
+            for _ in range(dx+1):
+                if img[y,x] == 0:
+                    img[y,x] = color
+                x += sx
+                err += 2 * dy
+                if err >= 0:
+                    y += sy
+                    err -= 2 * dx
+        else:
+            err = 2 * dx - dy
+            for _ in range(dy+1):
+                if img[y,x] == 0:
+                    img[y,x] = color
+                y += sy
+                err += 2 * dx
+                if err >= 0:
+                    x += sx
+                    err -= 2 * dy
+
+        return img
+
+
     #点群データから画像作成
     def plotPoint2Image(self, data):
         coefficient = 100.0 / 5.0
@@ -162,16 +194,20 @@ class MappingSimulator(CommMyRobotSimulator):
 
             robot_x = self.now_pos[0]
             robot_y = self.now_pos[2]
+            dir = -radians(self.now_dir[1] - self.init_dir[1])
 
-            robot_x = int(robot_x * coefficient + origin_x)
-            robot_y = int(-robot_y * coefficient + origin_y)
+            robot_x = int((robot_x + self.urg_offset[0] * cos( dir )) * coefficient + origin_x)
+            robot_y = int(-(robot_y + self.urg_offset[0] * sin( dir )) * coefficient + origin_y)
 
-            cv2.line(self.img, (robot_x,robot_y),(x,y),(100,100,100))
+            self.img = self.line(self.img, (robot_x,robot_y),(x,y),101)
 
             if self._errorlist[index] == True:continue
         
-            if self.img[y,x] != 250:
+            if self.img[y,x] <= 200:
                self.img[y,x] += 50
+            else :
+                self.img[y,x] = 255
+            #self.img[y,x] = 250 if (self.img[y,x] + 50) > 250 else (self.img[y,x] + 50)
         return self.img
 
     # 現在地を取得し，メンバを更新
@@ -243,7 +279,7 @@ class MappingSimulator(CommMyRobotSimulator):
         #plt.pause(.001)
         cv2.imshow("map", self.img)
         if cv2.waitKey(1) == 27:
-            cv2.imwrite("map.jpg", self.img)
+            cv2.imwrite("map.bmp", self.img)
 
 
         #data_array = R1.dot(res)
@@ -272,7 +308,7 @@ class LocalizationSimulator(CommMyRobotSimulator):
     def __init__(self, serverPort = 8000, serverAddr = 'localhost'):
         super().__init__(serverPort, serverAddr)
 
-        self.pf = MyParticleFilter("./map2.jpg")
+        self.pf = MyParticleFilter("./map.bmp")
 
         self.init_pos = []
         self.init_dir = []
@@ -290,6 +326,15 @@ class LocalizationSimulator(CommMyRobotSimulator):
         self.est_pos = [] # [x,y,th]
 
         self.map_coord_origin = [300,1000]
+
+    def _degree_disp(self, current_deg, pre_deg):
+        disp = current_deg - pre_deg
+        if disp >= 180.0:
+            disp -= 360.0
+        elif disp <= -180.0:
+            disp += 360.0
+        return disp
+
 
     # 現在地を取得し，メンバを更新
     def get_movement(self):
@@ -320,7 +365,7 @@ class LocalizationSimulator(CommMyRobotSimulator):
         rand_noise = random.random() * rand_range * 2 - rand_range
         noisy_x = (self.now_pos[0] - self.pre_pos[0]) * 1.3
         noisy_y = (self.now_pos[2] - self.pre_pos[2]) * 1.3
-        noisy_th = self.now_dir[2] - self.pre_dir[2] + 3.0
+        noisy_th = self._degree_disp( self.now_dir[1], self.pre_dir[1]) * 1.0 * 0
         #self.now_pos_noisy = [x + rand_noise for x in response[0:3]]
         self.now_pos_noisy = [self.pre_pos_noisy[0] + noisy_x, self.pre_pos_noisy[1] + noisy_y, self.now_pos[2]]
         self.now_dir_noisy = [x + noisy_th for x in response[3:6]]
@@ -393,7 +438,7 @@ class LocalizationSimulator(CommMyRobotSimulator):
         #self.pf.set_delta_position([self.now_pos[0]-self.pre_pos[0],self.now_pos[1]-self.pre_pos[1]],
         #                           (self.now_dir[1]-self.pre_dir[1]) * pi / 180.0)
         self.pf.set_delta_position([self.now_pos_noisy[0]-self.pre_pos_noisy[0],-(self.now_pos_noisy[1]-self.pre_pos_noisy[1])],
-                                   (self.now_dir_noisy[1]-self.pre_dir_noisy[1]) * pi / 180.0)
+                                   self._degree_disp(self.now_dir_noisy[1],self.pre_dir_noisy[1]) * pi / 180.0)
         self.lrf_data = self.get_lrf_data()
         self.est_pos = self.pf.estimate_position(self.lrf_data)
         #cv2.imshow("lrf",self.plotPoint2Image( lrf ))
