@@ -363,12 +363,12 @@ class LocalizationSimulator(CommMyRobotSimulator):
 
         rand_range = 1.0
         rand_noise = random.random() * rand_range * 2 - rand_range
-        noisy_x = (self.now_pos[0] - self.pre_pos[0]) * 1.3
-        noisy_y = (self.now_pos[2] - self.pre_pos[2]) * 1.3
-        noisy_th = self._degree_disp( self.now_dir[1], self.pre_dir[1]) * 1.0 * 0
+        noisy_x = (self.now_pos[0] - self.pre_pos[0] + 0.1) * 1.1
+        noisy_y = (self.now_pos[2] - self.pre_pos[2] + 0.1) * 1.1
+        noisy_th = (self._degree_disp( self.now_dir[1], self.pre_dir[1]) - 2.5) * 1.1
         #self.now_pos_noisy = [x + rand_noise for x in response[0:3]]
         self.now_pos_noisy = [self.pre_pos_noisy[0] + noisy_x, self.pre_pos_noisy[1] + noisy_y, self.now_pos[2]]
-        self.now_dir_noisy = [x + noisy_th for x in response[3:6]]
+        self.now_dir_noisy = [x + noisy_th for x in self.pre_dir_noisy]
 
     # 点群情報を取得し，map画像を作成
     def get_lrf_data(self):
@@ -392,16 +392,24 @@ class LocalizationSimulator(CommMyRobotSimulator):
                img[y,x] = 200
         return img
 
+    def _hsv_to_rgb(self, h, s, v):
+        bgr = cv2.cvtColor(np.array([[[h, s, v]]], dtype=np.uint8), cv2.COLOR_HSV2BGR)[0][0]
+        return (int(bgr[2]), int(bgr[1]), int(bgr[0]))
+
     def show_position(self):
         img = copy.deepcopy(self.pf._map_image)
         img = cv2.cvtColor(img,cv2.COLOR_GRAY2BGR)
 
         # パーティクルたち
-        for p in self.pf._particle_list:
+        for i, p in enumerate( self.pf._particle_list ):
+            c = self._hsv_to_rgb(int(i / self.pf._particle_num * 120),200,200) 
+            #c = self._hsv_to_rgb(int(p.nomalized_weight*120),200,200) 
+            #c = self._hsv_to_rgb(int(120),200,200) 
+            #c = (0,255,0)
             cv2.circle(img,
                    (int(p.x),
                     int(p.y)),
-                   1,(0,255,0))
+                   1,c)
 
         coeff = 1000 // 50
         # 真の位置
@@ -409,18 +417,37 @@ class LocalizationSimulator(CommMyRobotSimulator):
                    (int((self.now_pos[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
                     int(-(self.now_pos[2] - self.init_pos[2]) * coeff) + self.map_coord_origin[1]),
                    10,(0,0,255),3)
-
+        dir = radians(self.now_dir[1] - self.init_dir[1])
+        cv2.line(img,
+                 (int((self.now_pos[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int(-(self.now_pos[2] - self.init_pos[2]) * coeff) + self.map_coord_origin[1]),
+                 (int((self.now_pos[0] - self.init_pos[0]) * coeff + 15 * cos(dir)) + self.map_coord_origin[0],
+                    int(-(self.now_pos[2] - self.init_pos[2]) * coeff + 15 * sin (dir)) + self.map_coord_origin[1]),
+                    (0,0,255),3)
         # ノイズ入りの位置
         cv2.circle(img,
                    (int((self.now_pos_noisy[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
-                    int(-(self.now_pos_noisy[2] - self.init_pos[2]) * coeff) + self.map_coord_origin[1]),
+                    int(-(self.now_pos_noisy[1] - self.init_pos[1]) * coeff) + self.map_coord_origin[1]),
                    5,(0,0,255),3)
+        dir = radians(self.now_dir_noisy[1] - self.init_dir[1])
+        cv2.line(img,
+                 (int((self.now_pos_noisy[0] - self.init_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int(-(self.now_pos_noisy[1] - self.init_pos[1]) * coeff) + self.map_coord_origin[1]),
+                 (int((self.now_pos_noisy[0] - self.init_pos[0]) * coeff + 9 * cos(dir)) + self.map_coord_origin[0],
+                    int(-(self.now_pos_noisy[1] - self.init_pos[1]) * coeff + 9 * sin (dir)) + self.map_coord_origin[1]),
+                    (0,0,255),3)
 
         # 推定位置
         cv2.circle(img,
                    (int((self.est_pos[0]) * coeff) + self.map_coord_origin[0],
                     int((self.est_pos[1]) * coeff) + self.map_coord_origin[1]),
                    5,(255,0,0),3)
+        cv2.line(img,
+                 (int((self.est_pos[0]) * coeff) + self.map_coord_origin[0],
+                    int((self.est_pos[1]) * coeff) + self.map_coord_origin[1]),
+                 (int((self.est_pos[0]) * coeff + 9 * cos(self.est_pos[2])) + self.map_coord_origin[0],
+                    int((self.est_pos[1]) * coeff + 9 * sin (self.est_pos[2])) + self.map_coord_origin[1]),
+                    (255,0,0),3)
 
         cv2.imshow("estimate",img)
 
@@ -443,9 +470,11 @@ class LocalizationSimulator(CommMyRobotSimulator):
         self.est_pos = self.pf.estimate_position(self.lrf_data)
         #cv2.imshow("lrf",self.plotPoint2Image( lrf ))
         self.show_position()
-        cv2.waitKey(5)
+        if cv2.waitKey(5) == 27:
+            return True
+        else:return False
 
 
     def localization_loop(self):
         while True:
-            self.localize()
+            if self.localize():break
