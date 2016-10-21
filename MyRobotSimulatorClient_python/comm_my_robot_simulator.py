@@ -8,6 +8,7 @@ from my_iterative_closest_point import *
 import copy
 import cv2
 from localization import *
+import time
 
 
 class CommMyRobotSimulator:
@@ -68,15 +69,18 @@ class CommMyRobotSimulator:
 
     # 現在地を取得し，メンバを更新
     def get_movement(self):
-        return self.get_data_list( "move get")
+        return self.get_data_list( "move get coordinate")
+
+    def get_is_driving(self):
+        return self.get_data_list( "move get isdriving")
 
     # 点群情報を取得し，map画像を作成
     def get_lrf_data(self):
         return self.get_data_list("lrf a")
 
     # 駆動指令を送信
-    def send_driving_command(self, direction, speed):
-        command = "move send " + direction + " " + str(speed)
+    def send_driving_command(self, direction, value, speed, tolerance):
+        command = "move send direction " + direction + " " + str(value) + " " + str(speed) + " " + str(tolerance)
         self.get_data_list(command)
 
     # 衝突しているオブジェクトの数を取得
@@ -92,6 +96,10 @@ class CommMyRobotSimulator:
     def Localization_loop(self):
         loc = LocalizationSimulator()
         loc.localization_loop()
+
+    def drive(self):
+        d = DrivingSimulator()
+        d.drive_follow_path()
 
 class MappingSimulator(CommMyRobotSimulator):
     def __init__(self, serverPort = 8000, serverAddr = "localhost"):
@@ -309,7 +317,9 @@ class LocalizationSimulator(CommMyRobotSimulator):
         super().__init__(serverPort, serverAddr)
 
         self.pf = MyParticleFilter("./map.bmp")
+        self._show_img = cv2.imread("./map.bmp.jpg")
 
+        # [m],[deg]
         self.init_pos = []
         self.init_dir = []
 
@@ -397,8 +407,10 @@ class LocalizationSimulator(CommMyRobotSimulator):
         return (int(bgr[2]), int(bgr[1]), int(bgr[0]))
 
     def show_position(self):
-        img = copy.deepcopy(self.pf._map_image)
-        img = cv2.cvtColor(img,cv2.COLOR_GRAY2BGR)
+        #img = copy.deepcopy(self.pf._map_image)
+        #img = cv2.cvtColor(img,cv2.COLOR_GRAY2BGR)
+
+        img = copy.deepcopy(self._show_img)
 
         # パーティクルたち
         for i, p in enumerate( self.pf._particle_list ):
@@ -410,6 +422,17 @@ class LocalizationSimulator(CommMyRobotSimulator):
                    (int(p.x),
                     int(p.y)),
                    1,c)
+
+        for i, p in enumerate( self.pf._particle_list ):
+            if p.nomalized_weight < 0.9:break
+            c = self._hsv_to_rgb(int(i / self.pf._particle_num * 120),200,200) 
+            #c = self._hsv_to_rgb(int(p.nomalized_weight*120),200,200) 
+            #c = self._hsv_to_rgb(int(120),200,200) 
+            #c = (0,255,0)
+            cv2.circle(img,
+                   (int(p.x),
+                    int(p.y)),
+                   7,(0,255,0),3)
 
         coeff = 1000 // 50
         # 真の位置
@@ -470,11 +493,102 @@ class LocalizationSimulator(CommMyRobotSimulator):
         self.est_pos = self.pf.estimate_position(self.lrf_data)
         #cv2.imshow("lrf",self.plotPoint2Image( lrf ))
         self.show_position()
-        if cv2.waitKey(5) == 27:
-            return True
-        else:return False
+        cv2.waitKey(5)
 
 
     def localization_loop(self):
         while True:
-            if self.localize():break
+            self.localize()
+
+
+class DrivingSimulator(LocalizationSimulator):
+    """
+    1.経路情報読み込み
+    2.回転
+    3.直進
+    stop送る式か座標送る式か
+    """
+    def __init__(self, serverPort = 8000, serverAddr = "localhost"):
+        super().__init__(serverPort, serverAddr)
+
+        self._route_file = open("map.bmp.rt",'r')
+        self._route_file.readline() # ignore header
+
+        self._pre_coord = [] # 画像座標
+        self._now_coord = []
+        self._next_coord = []
+
+        self._get_next_coord()
+        self._now_coord = [self._next_coord[0] - 5,
+                           self._next_coord[1] ]
+
+        self._orientation = 0.0 # [rad]
+
+    def _get_next_coord(self):
+        line = self._route_file.readline()
+        if not line: return False
+
+        line = [ int(x) for x in line.split(',')[:-1]]
+
+        self._pre_coord = self._now_coord
+        self._now_coord = self._next_coord
+
+        self._next_coord = line[0:2]
+
+        return True
+
+    def _calc_rotate_angle(self):
+        vec1 = [cos(self._orientation),sin(self._orientation)]
+        vec2 = [ self._next_coord[0] - self._now_coord[0],
+                self._next_coord[1] - self._now_coord[1]]
+
+        absVec2 = sqrt(vec2[0]**2 + vec2[1]**2)
+        vec2 = [vec2[0]/absVec2, vec2[1]/absVec2]
+
+        det = vec1[0] * vec2[1] - vec1[1] * vec2[0]
+        inner = vec1[0] * vec2[0] + vec1[1] * vec2[1]
+
+        rad = atan2(det, inner)
+        self._orientation += rad
+
+        return rad
+
+    def _calc_distance(self):
+        disp = [ self._next_coord[0] - self._now_coord[0],
+                 self._next_coord[1] - self._now_coord[1]]
+        return sqrt( disp[0] ** 2 + disp[1] ** 2) * 50 / 1000 # [m]
+
+    def _send_rotate_angle(self, radian):
+        print("rotate" + str(degrees(radian)))
+        if radian > 0:
+            self.send_driving_command("right", degrees(radian), 5.0, 1.0)
+        else:
+            self.send_driving_command("left", degrees(radian), 5.0, 1.0) 
+
+    def _send_straight_distance(self, distance):
+        print("straight" + str(distance))
+        if distance > 0:
+            self.send_driving_command("forward", distance, 0.3, 1.0)
+        else:
+            self.send_driving_command("back", distance, 0.3, 1.0)
+
+    def _drive(self):
+        # rotate
+        #self._send_rotate_angle(self._calc_rotate_angle() * self.pf._gaussian(1.0, 0.5))
+        self._send_rotate_angle(self._calc_rotate_angle())
+        while self.get_is_driving()[0]: 
+            self.localize()
+        
+        # straight
+        #self._send_straight_distance(self._calc_distance() * self.pf._gaussian(1.0, 0.5))
+        self._send_straight_distance(self._calc_distance())
+        while self.get_is_driving()[0]: 
+            self.localize()
+            self._now_coord = [int(self.est_pos[0] * 1000 / 50), int(self.est_pos[2] * 1000 / 50)]
+            self._orientation = self.est_pos[2]
+            self._drive()
+
+    def drive_follow_path(self):
+        # next coord
+        while self._get_next_coord():
+            self._drive()

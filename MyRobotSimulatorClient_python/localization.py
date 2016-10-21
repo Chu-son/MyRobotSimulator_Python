@@ -5,6 +5,7 @@ import random
 import copy
 from multiprocessing import pool
 from multiprocessing import process
+from processing_timer import ProcessingTimer
 
 class MyParticleFilter():
     class Particle():
@@ -22,9 +23,12 @@ class MyParticleFilter():
         self._pixel_size = 50 # mm/pixel
 
         # 得点表作成
-        #self._points = [32,16,4,2]
-        self._points = [255,128,32,8]
+        self._points = [64,32,16,4,2]
+        self._no_obstacle_point = 2
+        #self._points = [255,128,32,8]
         #self._points = [200,150,100,50,1] # 目視確認用
+        #self._no_obstacle_point = 16
+
         self._point_len = len(self._points)-1
         self._point_table = []
         for y in range(len(self._points)*2-1):
@@ -59,7 +63,7 @@ class MyParticleFilter():
         for y in range(self._point_len+1, self._map_image.shape[0]-self._point_len):
             for x in range(self._point_len+1, self._map_image.shape[1]-self._point_len):
                 if self._map_image[y,x] == 101:
-                    ref_map[y,x] = 16
+                    ref_map[y,x] = self._no_obstacle_point
 
                 if self._map_image[y,x] > 101:
                     for yp in range(self._point_len * 2 + 1):
@@ -85,7 +89,7 @@ class MyParticleFilter():
         return trimed_map
 
     # ガウス分布の乱数生成
-    def _gaussian(self):
+    def _gaussian(self, mu, sigma):
         x = 0.0
         while x == 0.0:
             x = random.random()
@@ -93,7 +97,7 @@ class MyParticleFilter():
         s = sqrt( -2.0 * log(x) )
         t = 2.0 * pi * y
 
-        return s * cos(t)
+        return mu + sigma * s * sin(t)
 
     # 初期位置設定
     # pos:[x,y](pixel), theta(rad)
@@ -105,17 +109,17 @@ class MyParticleFilter():
         self._theta = theta        
         self._particle_list.clear()
         for _ in range(self._particle_num):
-            self._particle_list.append( MyParticleFilter.Particle( pos[0] + self._gaussian() * 30,
-                                                                   pos[1] + self._gaussian() * 30,
-                                                                   theta + self._gaussian() * 0.1,
+            self._particle_list.append( MyParticleFilter.Particle( pos[0] + self._gaussian(0, 30),
+                                                                   pos[1] + self._gaussian(0, 30),
+                                                                   theta + self._gaussian(0, 0.1),
                                                                    0.0 ) )
 
     # 指定した分散に基づいてパーティクルをランダム移動
     def _get_resample_particle(self, particle, sigma_pos, sigma_theta):
         p = copy.deepcopy(particle)
-        p.x = particle.x + self._gaussian() * sigma_pos
-        p.y = particle.y + self._gaussian() * sigma_pos
-        p.theta = particle.theta + self._gaussian() * sigma_theta
+        p.x = particle.x + self._gaussian(0, sigma_pos)
+        p.y = particle.y + self._gaussian(0, sigma_pos)
+        p.theta = particle.theta + self._gaussian(0, sigma_theta)
 
         # 尤度マップ的にあり得ない位置なら再計算
         return p if self._likelihood_map[p.y,p.x] != 0 \
@@ -133,8 +137,8 @@ class MyParticleFilter():
 
     # パーティクル群のリサンプリング
     def _resample_particles(self):
-        thre1 = 1/3
-        thre2 = 1 - thre1 - 1/8
+        thre1 = 1/50
+        thre2 = 1 - thre1 - 1/3
         boundary1 = int(self._particle_num * thre1)
         boundary2 = int(self._particle_num * thre2) + boundary1
 
@@ -173,27 +177,12 @@ class MyParticleFilter():
         self._pos = [self._pos[0] + dPos[0], self._pos[1] + dPos[1]]
         self._theta += dTh
 
-        #for i in range(num):
-        #    #self._particle_list[i].x = self._particle_list[ i ].x + dPos[0] + self._gaussian() * var_fb
-        #    #self._particle_list[i].y = self._particle_list[ i ].y + dPos[1] + self._gaussian() * var_fb
-        #    #self._particle_list[i].theta = self._particle_list[ i ].theta + dTh + self._gaussian() * var_ang
-        #    self._particle_list[i].x = self._pos[0] + self._gaussian() * var_fb
-        #    self._particle_list[i].y = self._pos[1] + self._gaussian() * var_fb
-        #    self._particle_list[i].theta = self._theta+ self._gaussian() * var_ang
-        #for i in range(num, self._particle_num):
-        #    #self._particle_list[i].x = self._particle_list[ i % num ].x + dPos[0] + cos( self._particle_list[ i % num ].theta) * self._gaussian() * var_fb
-        #    #self._particle_list[i].y = self._particle_list[ i % num ].y + dPos[1] + sin( self._particle_list[ i % num ].theta) * self._gaussian() * var_fb
-        #    #self._particle_list[i].x = self._particle_list[ i ].x + dPos[0] + self._gaussian() * var_fb
-        #    #self._particle_list[i].y = self._particle_list[ i ].y + dPos[1] + self._gaussian() * var_fb
-        #    #self._particle_list[i].theta = self._particle_list[ i ].theta + dTh + self._gaussian() * var_ang
-        #    self._particle_list[i].x = self._pos[0] + self._gaussian() * var_fb2
-        #    self._particle_list[i].y = self._pos[1] + self._gaussian() * var_fb2
-        #    self._particle_list[i].theta = self._theta + self._gaussian() * var_ang2
-
+        sigma_pos = 0.5
+        sigma_th = 0.5
         for i in range(self._particle_num):
-            self._particle_list[i].x = self._particle_list[i].x + dPos[0] * (self._gaussian() * 0.2 + 1.0)
-            self._particle_list[i].y = self._particle_list[i].y + dPos[1] * (self._gaussian() * 0.2 + 1.0)
-            self._particle_list[i].theta = self._particle_list[i].theta + dTh * (self._gaussian() * 0.2 + 1.0)
+            self._particle_list[i].x = self._particle_list[i].x + dPos[0] * (self._gaussian(1.0, sigma_pos))
+            self._particle_list[i].y = self._particle_list[i].y + dPos[1] * (self._gaussian(1.0, sigma_pos))
+            self._particle_list[i].theta = self._particle_list[i].theta + dTh * (self._gaussian(1.0, sigma_th))
 
     def show_particles(self):
         img = copy.deepcopy(self._map_image)
@@ -252,9 +241,9 @@ class MyParticleFilter():
             #if x < 0: x = 0
             #elif x >= refmap.shape[0]: x = refmap.shape[0] - 1
 
-            y = int(y + self._ref_height/2 + 0.5)
+            y = int(y + self._ref_height/2)
             if y < 0 or y >= refmap.shape[1]: continue
-            x = int(x + self._ref_width/2 + 0.5)
+            x = int(x + self._ref_width/2)
             if x < 0 or x >= refmap.shape[0]: continue
 
             ret_weight += refmap.item(y,x)
@@ -290,93 +279,105 @@ class MyParticleFilter():
         y = 0.0
         th = 0.0
         for p in self._particle_list:
-            if p.nomalized_weight < 0.8:break
+            if p.nomalized_weight < 0.9:break
             num += 1
             w += p.weight
             x += p.x * p.weight
             y += p.y * p.weight
             th += p.theta * p.weight
-        x = x/w
-        y = y/w
-        th = th/w
+        if w == 0:
+            x = self._particle_list[0].x
+            y = self._particle_list[0].y
+            th = self._particle_list[0].theta
 
-        acc = w / (num * self._points[0] * len(lrfdata[0]))
+            acc = 0.0
 
+        else:
+            x = x/w
+            y = y/w
+            th = th/w
+
+            acc = w / (num * self._points[0] * len(lrfdata[0]))
+        
         return [x, y], th, acc
 
     # 重みを正規化
     def __normalize_weight(self):
-        max_val = self._particle_list[0].weight
+        max_val = self._particle_list[0].weight if self._particle_list[0].weight != 0 else 1
         for i in range(self._particle_num):
             self._particle_list[i].nomalized_weight = self._particle_list[i].weight / max_val
 
     # 自己位置推定
     # LRFdata : [ [ x0, x1, x2 ...], [y0, y1, y2, ...] ](m)
     def estimate_position(self, LRFdata):
-        #print("start estimate")
+        # 処理時間計測
+        with ProcessingTimer("localize time"):
 
-        # 参照マップ作製
-        ref_map = self._prepare_ref_map()
-        #cv2.imshow("ref",self._ref_map)
+            #print("start estimate")
 
-        # m => pixel
-        lrfdata = np.array(LRFdata) * 1000 / self._pixel_size
-        self.plotPoint2Image(lrfdata)
+            # 参照マップ作製
+            ref_map = self._prepare_ref_map()
+            #cv2.imshow("ref",self._ref_map)
 
-        # 重み計算
-        #for index in range(self._particle_num):
-        #    self._particle_list[index].weight = self._calc_particle_weight(self._particle_list[index],
-        #                                                                   lrfdata,
-        #                                                                   ref_map)
+            # m => pixel
+            lrfdata = np.array(LRFdata) * 1000 / self._pixel_size
+            self.plotPoint2Image(lrfdata)
 
-        #args = [[],[],[]]
-        #for p in self._particle_list:
-        #    args[0].append(p)
-        #    args[1].append(lrfdata)
-        #    args[2].append(ref_map)
-        args = []
-        for p in self._particle_list:
-            args.append([p,lrfdata,ref_map])
-        p = pool.Pool(8)
-        result = list(p.map(self._calc_particle_weight_multi,args
-                            #(self._particle_list,
-                            #   #[lrfdata for _ in self._particle_list],
-                            #   #[ref_map for _ in self._particle_list]))
-                            #   args[1],
-                            #   args[2]))
-                      ))
-        for index in range(self._particle_num):
-            self._particle_list[index].weight = result[index]
-        p.close()
+            # 重み計算
+            #for index in range(self._particle_num):
+            #    self._particle_list[index].weight = self._calc_particle_weight(self._particle_list[index],
+            #                                                                   lrfdata,
+            #                                                                   ref_map)
 
-        # ソート
-        self._particle_list = sorted(self._particle_list, key = lambda x : x.weight, reverse = True)
-        # 重み正規化
-        self.__normalize_weight()
+            #args = [[],[],[]]
+            #for p in self._particle_list:
+            #    args[0].append(p)
+            #    args[1].append(lrfdata)
+            #    args[2].append(ref_map)
+            args = []
+            for p in self._particle_list:
+                args.append([p,lrfdata,ref_map])
+            p = pool.Pool(8)
+            result = list(p.map(self._calc_particle_weight_multi,args
+                                #(self._particle_list,
+                                #   #[lrfdata for _ in self._particle_list],
+                                #   #[ref_map for _ in self._particle_list]))
+                                #   args[1],
+                                #   args[2]))
+                          ))
+            for index in range(self._particle_num):
+                self._particle_list[index].weight = result[index]
+            p.close()
 
-        # 重み最大のパーティクルをロボットの位置と推定する場合
-        #self._pos = [self._particle_list[0].x, self._particle_list[0].y]
-        #self._theta = self._particle_list[0].theta
+            # ソート
+            self._particle_list = sorted(self._particle_list, key = lambda x : x.weight, reverse = True)
+            # 重み正規化
+            self.__normalize_weight()
 
-        # 重み最大のパーティクル群の平均を推定位置とする場合
-        #self._pos, self._theta = self.__calc_pos_ave()
-        #self._resample_particles()
+            # 重み最大のパーティクルをロボットの位置と推定する場合
+            #self._pos = [self._particle_list[0].x, self._particle_list[0].y]
+            #self._theta = self._particle_list[0].theta
 
-        # 重み平均に基づいて位置推定
-        p,th, acc = self.__calc_pos_weight_ave(lrfdata)
-        w = self._calc_particle_weight(MyParticleFilter.Particle(p[0],p[1],th,0),
-                                       lrfdata,ref_map)
-        acc = w / (self._points[0] * len(lrfdata[0]))
-        print(acc * 100.0)
-        if acc > 0:
-            self._pos, self._theta = p,th
-            self._resample_particles()
-        else:
-            self._random_sample_particles(50, 0.1)
+            # 重み最大のパーティクル群の平均を推定位置とする場合
+            #self._pos, self._theta = self.__calc_pos_ave()
+            #self._resample_particles()
 
-        #self.show_particles()
+            # 重み平均に基づいて位置推定
+            p,th, acc = self.__calc_pos_weight_ave(lrfdata)
+            w = self._calc_particle_weight(MyParticleFilter.Particle(p[0],p[1],th,0),
+                                           lrfdata,ref_map)
+            acc = w / (self._points[0] * len(lrfdata[0])) if len(lrfdata[0]) != 0 else 0
+            print(acc * 100.0)
+            if acc >= 0:
+                self._pos, self._theta = p,th
+                self._resample_particles()
+            else:
+                self._random_sample_particles(50, 0.1)
 
-        #print("end estimate")
+            #self.show_particles()
+
+            #print("end estimate")
+
         return ((self._pos[0] - self._init_pos[0]) * self._pixel_size / 1000 ,
                 (self._pos[1] - self._init_pos[1]) * self._pixel_size / 1000 ,
                 self._theta)
