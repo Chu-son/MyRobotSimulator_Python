@@ -45,13 +45,15 @@ class MyParticleFilter():
         self._make_likelihood_map()
 
         # パーティクル
-        self._particle_num = 1000;
+        self._particle_num = 2000;
         self._particle_list = []
 
         self._pos = [0.0, 0.0] # [x, y] (pixel)
         self._theta = 0.0 # rad
         self._init_pos = [] # [x, y] (pixel)
         self._init_theta = 0.0 # (rad)
+
+        self._is_init_gpu = False
 
     # 事前地図から尤度マップ的なのを作成
     def _make_likelihood_map(self):
@@ -80,8 +82,8 @@ class MyParticleFilter():
 
     # 尤度マップから現在地に基づく参照マップを切り取り
     def _prepare_ref_map(self):
-        trimed_map = self._likelihood_map[max(self._pos[1] - self._ref_height/2,0) : self._pos[1] + self._ref_height/2,
-                                  max(self._pos[0] - self._ref_width/2,0) : self._pos[0] + self._ref_width/2]        
+        trimed_map = self._likelihood_map[max(self._pos[1] - self._ref_height//2,0) : self._pos[1] + self._ref_height//2,
+                                  max(self._pos[0] - self._ref_width//2,0) : self._pos[0] + self._ref_width//2]        
         #cv2.imshow("trim",trimed_map)
         #cv2.imshow("ref",ref_map)
         #cv2.imwrite("ref.jpg",ref_map)
@@ -92,8 +94,8 @@ class MyParticleFilter():
     def _gaussian(self, mu, sigma):
         x = 0.0
         while x == 0.0:
-            x = random.random()
-        y = random.random()
+            x = np.random.random()
+        y = np.random.random()
         s = sqrt( -2.0 * log(x) )
         t = 2.0 * pi * y
 
@@ -116,7 +118,8 @@ class MyParticleFilter():
 
     # 指定した分散に基づいてパーティクルをランダム移動
     def _get_resample_particle(self, particle, sigma_pos, sigma_theta):
-        p = copy.deepcopy(particle)
+        #p = copy.deepcopy(particle)
+        p = MyParticleFilter.Particle(particle.x, particle.y, particle.theta,0.0)
         p.x = particle.x + self._gaussian(0, sigma_pos)
         p.y = particle.y + self._gaussian(0, sigma_pos)
         p.theta = particle.theta + self._gaussian(0, sigma_theta)
@@ -220,7 +223,8 @@ class MyParticleFilter():
 
     # パーティクルの重みを計算
     def _calc_particle_weight(self, particle, lrfdata, refmap):
-        if self._likelihood_map[particle.y,particle.x] == 0:
+        #return 0
+        if self._likelihood_map[int(particle.y),int(particle.x)] == 0:
             return 0
 
         R = np.array([[cos( -particle.theta ) , sin( -particle.theta)],
@@ -248,10 +252,20 @@ class MyParticleFilter():
 
             ret_weight += refmap.item(y,x)
 
+            #y = int(y + self._ref_height/2)
+            #if y < 0 or y >= len(refmap): continue
+            #x = int(x + self._ref_width/2)
+            #if x < 0 or x >= len(refmap[0]): continue
+
+            #ret_weight += refmap[y][x]
+
         return ret_weight
 
     def _calc_particle_weight_multi(self, args):
         return self._calc_particle_weight(args[0],args[1],args[2])
+
+    def _calc_particle_weight_multi2(self, args):
+        return [ self._calc_particle_weight(arg[0],arg[1],arg[2]) for arg in args]
 
     # 重み最大のパーティクルの平均で位置を推定
     def __calc_pos_ave(self):
@@ -307,6 +321,27 @@ class MyParticleFilter():
         for i in range(self._particle_num):
             self._particle_list[i].nomalized_weight = self._particle_list[i].weight / max_val
 
+    def __init_gpu(self):
+        if self._is_init_gpu:return
+
+        import pycuda.driver as cuda
+        import pycuda.autoinit
+        from pycuda.compiler import SourceModule
+
+        self.__calc_weight_func = SourceModule(
+            """
+            __global__ void calcWeight(float** pxy, float** lrfdata, float** refmap)
+            {
+            }
+            """)
+
+        self._is_init_gpu = True
+
+    def _calc_particle_weight_gpu(self, particles, lrfdata, refmap):
+        particles_x_array = np.array([p.x for p in particles], dtype = np.float32)
+        particles_y_array = np.array([p.y for p in particles], dtype = np.float32)
+
+
     # 自己位置推定
     # LRFdata : [ [ x0, x1, x2 ...], [y0, y1, y2, ...] ](m)
     def estimate_position(self, LRFdata):
@@ -321,7 +356,7 @@ class MyParticleFilter():
 
             # m => pixel
             lrfdata = np.array(LRFdata) * 1000 / self._pixel_size
-            self.plotPoint2Image(lrfdata)
+            #self.plotPoint2Image(lrfdata)
 
             # 重み計算
             #for index in range(self._particle_num):
@@ -329,25 +364,28 @@ class MyParticleFilter():
             #                                                                   lrfdata,
             #                                                                   ref_map)
 
-            #args = [[],[],[]]
-            #for p in self._particle_list:
-            #    args[0].append(p)
-            #    args[1].append(lrfdata)
-            #    args[2].append(ref_map)
-            args = []
-            for p in self._particle_list:
-                args.append([p,lrfdata,ref_map])
-            p = pool.Pool(8)
-            result = list(p.map(self._calc_particle_weight_multi,args
-                                #(self._particle_list,
-                                #   #[lrfdata for _ in self._particle_list],
-                                #   #[ref_map for _ in self._particle_list]))
-                                #   args[1],
-                                #   args[2]))
-                          ))
-            for index in range(self._particle_num):
-                self._particle_list[index].weight = result[index]
+            args = [[p, lrfdata, ref_map] for p in self._particle_list]
+            pool_num = 6
+
+            args_split_num = int(len(args)/pool_num + 0.5)
+            args = [args[x:x+args_split_num] for x in range(0,len(args),args_split_num)]
+
+            p = pool.Pool(pool_num)
+            with ProcessingTimer("calc weight time"):
+                result = list(p.map(self._calc_particle_weight_multi2,args))
+            index = 0
+            for weight_list in result:
+                for w in weight_list:
+                    self._particle_list[index].weight = w
+                    index += 1
             p.close()
+
+            #p = pool.Pool(pool_num)
+            #with ProcessingTimer("calc weight time"):
+            #    result = list(p.map(self._calc_particle_weight_multi,args))
+            #for index, w in enumerate(result):
+            #    self._particle_list[index].weight = w
+            #p.close()
 
             # ソート
             self._particle_list = sorted(self._particle_list, key = lambda x : x.weight, reverse = True)

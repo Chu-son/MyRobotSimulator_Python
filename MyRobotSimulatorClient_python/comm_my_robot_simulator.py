@@ -522,6 +522,7 @@ class DrivingSimulator(LocalizationSimulator):
         self._now_coord = [self._next_coord[0] - 5,
                            self._next_coord[1] ]
 
+
         self._orientation = 0.0 # [rad]
 
     def _get_next_coord(self):
@@ -584,9 +585,19 @@ class DrivingSimulator(LocalizationSimulator):
         self._send_straight_distance(self._calc_distance())
         while self.get_is_driving()[0]: 
             self.localize()
-            self._now_coord = [int(self.est_pos[0] * 1000 / 50), int(self.est_pos[2] * 1000 / 50)]
-            self._orientation = self.est_pos[2]
-            self._drive()
+
+            #tmp_now = [self.now_pos,self.now_dir]
+            #tmp_now_noisy = [self.now_pos_noisy,self.now_dir_noisy]
+
+            #self.get_movement()
+            #self._now_coord = [int(self.est_pos[0] * 1000 / 50) + self.map_coord_origin[0] + self.now_pos_noisy[0] - self.pre_pos_noisy[0],
+            #                   int(-self.est_pos[1] * 1000 / 50) + self.map_coord_origin[1] + -(self.now_pos_noisy[2] - self.pre_pos_noisy[1])]
+            #self._orientation = self.est_pos[2] + radians( self.now_dir_noisy[1] - self.pre_dir_noisy[1])
+
+            #self.now_pos, self.now_dir = tmp_now
+            #self.now_pos_noisy,self.now_dir_noisy = tmp_now_noisy
+
+            #self._drive()
 
     def drive_follow_path(self):
         # next coord
