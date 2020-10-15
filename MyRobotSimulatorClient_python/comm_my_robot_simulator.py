@@ -317,7 +317,7 @@ class LocalizationSimulator(CommMyRobotSimulator):
         super().__init__(serverPort, serverAddr)
 
         self.pf = MyParticleFilter("./map.bmp")
-        self._show_img = cv2.imread("./map.bmp.jpg")
+        self._show_img = cv2.imread("./map.bmp")
 
         # [m],[deg]
         self.init_pos = []
@@ -472,6 +472,7 @@ class LocalizationSimulator(CommMyRobotSimulator):
                     int((self.est_pos[1]) * coeff + 9 * sin (self.est_pos[2])) + self.map_coord_origin[1]),
                     (255,0,0),3)
 
+        print(img.shape)
         cv2.imshow("estimate",img)
 
         th = self.pf._particle_list[0].theta

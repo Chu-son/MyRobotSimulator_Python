@@ -82,6 +82,10 @@ class MyParticleFilter():
 
     # 尤度マップから現在地に基づく参照マップを切り取り
     def _prepare_ref_map(self):
+
+        # とりあえず
+        self._pos = list(map(int,self._pos))
+
         trimed_map = self._likelihood_map[max(self._pos[1] - self._ref_height//2,0) : self._pos[1] + self._ref_height//2,
                                   max(self._pos[0] - self._ref_width//2,0) : self._pos[0] + self._ref_width//2]        
         #cv2.imshow("trim",trimed_map)
@@ -120,8 +124,8 @@ class MyParticleFilter():
     def _get_resample_particle(self, particle, sigma_pos, sigma_theta):
         #p = copy.deepcopy(particle)
         p = MyParticleFilter.Particle(particle.x, particle.y, particle.theta,0.0)
-        p.x = particle.x + self._gaussian(0, sigma_pos)
-        p.y = particle.y + self._gaussian(0, sigma_pos)
+        p.x = int(particle.x + self._gaussian(0, sigma_pos))
+        p.y = int(particle.y + self._gaussian(0, sigma_pos))
         p.theta = particle.theta + self._gaussian(0, sigma_theta)
 
         # 尤度マップ的にあり得ない位置なら再計算

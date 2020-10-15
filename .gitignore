@@ -191,3 +191,5 @@ ModelManifest.xml
 # add
 *.sln
 *.suo
+
+.vscode/
